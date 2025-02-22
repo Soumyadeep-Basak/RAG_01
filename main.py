@@ -2,22 +2,25 @@ import os
 import warnings
 import numpy as np
 import faiss
+import diskcache as dc
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader  
-# from paddleocr import PaddleOCR
 from llama_cpp import Llama
+import time
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Initialize models
 embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-llm = Llama(model_path=r"C:\Users\USER\OneDrive\Desktop\hack\rag\tinyllama-1.1b-chat-v1.0.Q2_K.gguf", verbose=False, n_ctx=2048,n_batch=32)
-
+llm = Llama(model_path=r"C:\Users\USER\OneDrive\Desktop\hack\rag\phi-2-q4_k_m.gguf", verbose=False, n_ctx=2048, n_batch=32)
 
 # FAISS Index
 index = None
 docs = []  # Store document chunks
+
+# Initialize DiskCache (persistent storage)
+cache = dc.Cache("./llm_cache")  # Stores cached responses in `./llm_cache` folder
 
 
 def process_text(file_path):
@@ -62,27 +65,37 @@ def retrieve(query, k=1):
 
 
 def generate_answer(query):
-    """Generate answer using LLM"""
-    context = retrieve(query)
-    prompt = f"Context: {context}\n\nQuestion: {query}\nAnswer:"
-    output = llm(prompt, max_tokens=100)
-    return output["choices"][0]["text"]
+    """Generate answer using LLM with caching and streaming"""
+    
+    if query in cache:  # Check if response is cached
+        cached_response = cache[query]
+        for word in cached_response.split():
+            print(word, end=" ", flush=True)
+            time.sleep(0.2)  # Simulating real-time output
+        print()
+        return
 
-def generate_answer(query):
-    """Generate answer using LLM with streaming output"""
     context = retrieve(query)
     prompt = f"Context: {context}\n\nQuestion: {query}\nAnswer:"
 
     prompt_tokens = len(prompt.split())  # Count input words
-    max_allowed_tokens = 2048 - prompt_tokens  # Prevent exceeding limit
+    max_allowed_tokens = 8192 - prompt_tokens  # Prevent exceeding limit
 
     if max_allowed_tokens <= 0:
         print("Error: Context too long. Reduce retrieved chunks.")
         return
 
-    # Stream output
+    # Generate LLM output with streaming
+    response = ""
     for output in llm(prompt, max_tokens=min(200, max_allowed_tokens), stream=True):
-        print(output["choices"][0]["text"], end="", flush=True)  # Print as it generates
+        word = output["choices"][0]["text"]
+        print(word, end="", flush=True)
+        response += word
+
+    # Cache response
+    cache[query] = response
+    print()
+    return response
 
 
 # --- Main Execution ---
@@ -101,11 +114,8 @@ elif file_ext == ".pdf":
 else:
     raise ValueError("Unsupported file type!")
 
-
-
 context = retrieve("Explain the attached text")
-print(f"Context Length (words): {len(context)}")
+# print(f"Context Length (words): {len(context)}")
+
 # Test Query
-print(generate_answer("explain the topic of the document"))
-
-
+generate_answer("explain the topic of the document in 350 words")  # First time: Computes, caches
